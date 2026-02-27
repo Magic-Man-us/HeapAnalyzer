@@ -55,3 +55,46 @@ export interface AnalysisResult {
 }
 
 export type SampleProgramMap = Record<string, Record<string, SampleProgram>>;
+
+// Sandbox types
+
+export type SandboxLanguage = 'JavaScript' | 'Python';
+
+export type AppMode = 'samples' | 'sandbox';
+
+export type SandboxStatus = 'idle' | 'running' | 'loading-pyodide' | 'success' | 'error' | 'timeout';
+
+export interface SandboxState {
+  status: SandboxStatus;
+  events: MemoryEvent[];
+  stdout: string;
+  stderr: string;
+  error: string | null;
+}
+
+export interface WorkerRunMessage {
+  type: 'run';
+  language: SandboxLanguage;
+  code: string;
+}
+
+export interface WorkerResultMessage {
+  type: 'result';
+  events: MemoryEvent[];
+  stdout: string;
+  stderr: string;
+}
+
+export interface WorkerErrorMessage {
+  type: 'error';
+  error: string;
+  stdout: string;
+  stderr: string;
+}
+
+export interface WorkerStatusMessage {
+  type: 'status';
+  status: 'loading-pyodide';
+}
+
+export type WorkerOutMessage = WorkerResultMessage | WorkerErrorMessage | WorkerStatusMessage;

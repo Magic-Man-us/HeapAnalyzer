@@ -1,15 +1,21 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Language, Verdict } from './types';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Language, Verdict, AppMode, SandboxLanguage, MemoryEvent } from './types';
 import { SAMPLE_PROGRAMS } from './data/samplePrograms';
 import { LANG_COLORS, STATUS_COLORS } from './utils/constants';
 import { useMemoryAnalysis, useAllSnapshots } from './hooks/useMemoryAnalysis';
 import { exportJSON, exportMarkdown, exportHTML } from './utils/exporters';
+import { useSandbox } from './sandbox/useSandbox';
+import { DEFAULT_CODE } from './sandbox/defaultCode';
 import MemoryBlockComponent from './components/MemoryBlock';
 import HeapChart from './components/HeapChart';
 import EventLog from './components/EventLog';
 import SourceViewer from './components/SourceViewer';
+import SandboxPanel from './components/SandboxPanel';
+
+const SANDBOX_LANGUAGES: SandboxLanguage[] = ['JavaScript', 'Python'];
 
 const App: React.FC = () => {
+  const [mode, setMode] = useState<AppMode>('samples');
   const [selectedLang, setSelectedLang] = useState<Language>('Rust');
   const [selectedProgram, setSelectedProgram] = useState(
     Object.keys(SAMPLE_PROGRAMS['Rust'])[0],
@@ -21,8 +27,20 @@ const App: React.FC = () => {
   const [showExport, setShowExport] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Sandbox state
+  const [sandboxLang, setSandboxLang] = useState<SandboxLanguage>('JavaScript');
+  const [sandboxCode, setSandboxCode] = useState<Record<SandboxLanguage, string>>({
+    JavaScript: DEFAULT_CODE.JavaScript,
+    Python: DEFAULT_CODE.Python,
+  });
+  const sandbox = useSandbox();
+
+  // Determine event source based on mode
+  const isSandboxMode = mode === 'sandbox';
   const program = SAMPLE_PROGRAMS[selectedLang][selectedProgram];
-  const events = program.events;
+  const sampleEvents = program.events;
+
+  const events: MemoryEvent[] = isSandboxMode ? sandbox.events : sampleEvents;
   const totalSteps = events.length;
 
   const { blocks, snapshots, stats } = useMemoryAnalysis(events, currentStep);
@@ -36,6 +54,19 @@ const App: React.FC = () => {
       ),
     [events],
   );
+
+  // Reset playback when sandbox produces new events
+  const prevSandboxEventsRef = useRef(sandbox.events);
+  useEffect(() => {
+    if (isSandboxMode && sandbox.events !== prevSandboxEventsRef.current) {
+      prevSandboxEventsRef.current = sandbox.events;
+      if (sandbox.events.length > 0) {
+        setIsPlaying(false);
+        setCurrentStep(-1);
+        setNewBlockIds(new Set());
+      }
+    }
+  }, [isSandboxMode, sandbox.events]);
 
   useEffect(() => {
     if (isPlaying) {
@@ -85,6 +116,37 @@ const App: React.FC = () => {
     reset();
   };
 
+  const switchMode = (newMode: AppMode) => {
+    setMode(newMode);
+    reset();
+    if (newMode === 'sandbox') {
+      // If current lang isn't a sandbox language, switch to JS
+      if (!SANDBOX_LANGUAGES.includes(selectedLang as SandboxLanguage)) {
+        setSelectedLang('JavaScript');
+        setSandboxLang('JavaScript');
+      } else {
+        setSandboxLang(selectedLang as SandboxLanguage);
+      }
+    }
+  };
+
+  const changeSandboxLang = (lang: SandboxLanguage) => {
+    setSandboxLang(lang);
+    setSelectedLang(lang);
+    reset();
+  };
+
+  const handleSandboxRun = useCallback(() => {
+    sandbox.run(sandboxLang, sandboxCode[sandboxLang]);
+  }, [sandbox, sandboxLang, sandboxCode]);
+
+  const handleSandboxCodeChange = useCallback(
+    (code: string) => {
+      setSandboxCode((prev) => ({ ...prev, [sandboxLang]: code }));
+    },
+    [sandboxLang],
+  );
+
   const step = () => {
     setIsPlaying(false);
     setCurrentStep((prev) => {
@@ -108,7 +170,7 @@ const App: React.FC = () => {
   };
 
   const verdict: Verdict | null =
-    currentStep >= totalSteps - 1
+    currentStep >= totalSteps - 1 && totalSteps > 0
       ? stats.doubleFreeCount > 0
         ? { text: 'DOUBLE FREE DETECTED', color: '#fbbf24', icon: '⚠' }
         : stats.leakedCount > 0
@@ -140,6 +202,10 @@ const App: React.FC = () => {
     );
     setShowExport(false);
   };
+
+  // All languages always shown; unsupported ones get a notice in sandbox mode
+  const allLanguages = Object.keys(SAMPLE_PROGRAMS) as Language[];
+  const [sandboxNotice, setSandboxNotice] = useState<string | null>(null);
 
   return (
     <div
@@ -202,100 +268,189 @@ const App: React.FC = () => {
           <span style={{ fontSize: 9, color: '#475569', letterSpacing: 1 }}>
             v2.0
           </span>
+
+          {/* Mode toggle */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 1,
+              marginLeft: 12,
+              background: 'rgba(0,0,0,0.2)',
+              borderRadius: 3,
+              padding: 1,
+            }}
+          >
+            {([
+              { key: 'samples' as const, label: 'Samples' },
+              { key: 'sandbox' as const, label: 'Write Code' },
+            ]).map((m) => (
+              <button
+                key={m.key}
+                onClick={() => switchMode(m.key)}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 9,
+                  fontFamily: "'IBM Plex Mono',monospace",
+                  letterSpacing: 0.5,
+                  borderRadius: 2,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  background: mode === m.key ? 'rgba(34,211,238,0.15)' : 'transparent',
+                  border: 'none',
+                  color: mode === m.key ? '#22d3ee' : '#475569',
+                  fontWeight: mode === m.key ? 600 : 400,
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 2 }}>
-          {(Object.keys(SAMPLE_PROGRAMS) as Language[]).map((lang) => (
-            <button
-              key={lang}
-              onClick={() => changeLang(lang)}
-              style={{
-                padding: '5px 14px',
-                fontSize: 10,
-                fontFamily: "'IBM Plex Mono',monospace",
-                letterSpacing: 0.5,
-                borderRadius: 3,
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-                background:
-                  selectedLang === lang
-                    ? `${LANG_COLORS[lang]}20`
-                    : 'transparent',
-                border: `1px solid ${selectedLang === lang ? `${LANG_COLORS[lang]}66` : 'rgba(148,163,184,0.1)'}`,
-                color:
-                  selectedLang === lang ? LANG_COLORS[lang] : '#4a5568',
-                fontWeight: selectedLang === lang ? 600 : 400,
-              }}
-            >
-              {lang}
-            </button>
-          ))}
+        <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+          {allLanguages.map((lang) => {
+            const isSandboxLangOption = SANDBOX_LANGUAGES.includes(lang as SandboxLanguage);
+            const isDisabled = isSandboxMode && !isSandboxLangOption;
+            return (
+              <button
+                key={lang}
+                onClick={() => {
+                  if (isDisabled) {
+                    setSandboxNotice(`${lang} is only available in the local version due to runtime dependencies`);
+                    setTimeout(() => setSandboxNotice(null), 4000);
+                    return;
+                  }
+                  isSandboxMode
+                    ? changeSandboxLang(lang as SandboxLanguage)
+                    : changeLang(lang);
+                }}
+                style={{
+                  padding: '5px 14px',
+                  fontSize: 10,
+                  fontFamily: "'IBM Plex Mono',monospace",
+                  letterSpacing: 0.5,
+                  borderRadius: 3,
+                  cursor: isDisabled ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
+                  opacity: isDisabled ? 0.35 : 1,
+                  background:
+                    selectedLang === lang
+                      ? `${LANG_COLORS[lang]}20`
+                      : 'transparent',
+                  border: `1px solid ${selectedLang === lang ? `${LANG_COLORS[lang]}66` : 'rgba(148,163,184,0.1)'}`,
+                  color:
+                    selectedLang === lang ? LANG_COLORS[lang] : '#4a5568',
+                  fontWeight: selectedLang === lang ? 600 : 400,
+                }}
+              >
+                {lang}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Scenario tabs */}
-      <div
-        style={{
-          padding: '6px 20px',
-          borderBottom: '1px solid rgba(34,211,238,0.08)',
-          display: 'flex',
-          gap: 4,
-          background: 'rgba(0,0,0,0.15)',
-          overflowX: 'auto',
-        }}
-      >
-        {Object.keys(SAMPLE_PROGRAMS[selectedLang]).map((name) => {
-          const short = name.replace(/^(Rust|JS|TS|Go|Python) — /, '');
-          return (
-            <button
-              key={name}
-              onClick={() => changeProg(name)}
-              style={{
-                padding: '4px 12px',
-                fontSize: 10,
-                fontFamily: "'IBM Plex Mono',monospace",
-                background:
-                  selectedProgram === name ? `${lc}15` : 'transparent',
-                border: `1px solid ${selectedProgram === name ? `${lc}40` : 'rgba(148,163,184,0.08)'}`,
-                color: selectedProgram === name ? lc : '#64748b',
-                borderRadius: 3,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
-            >
-              {short}
-            </button>
-          );
-        })}
-        <span
+      {/* Sandbox language notice */}
+      {sandboxNotice && (
+        <div
           style={{
+            padding: '6px 20px',
+            background: 'rgba(251,191,36,0.08)',
+            borderBottom: '1px solid rgba(251,191,36,0.2)',
             fontSize: 10,
-            color: '#334155',
-            padding: '4px 8px',
-            fontStyle: 'italic',
-            flexShrink: 0,
+            color: '#fbbf24',
+            letterSpacing: 0.5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            animation: 'fadeIn 0.2s ease',
           }}
         >
-          {program.description}
-        </span>
-      </div>
+          <span style={{ fontSize: 12 }}>&#9888;</span>
+          {sandboxNotice}
+        </div>
+      )}
+
+      {/* Scenario tabs (samples mode only) */}
+      {!isSandboxMode && (
+        <div
+          style={{
+            padding: '6px 20px',
+            borderBottom: '1px solid rgba(34,211,238,0.08)',
+            display: 'flex',
+            gap: 4,
+            background: 'rgba(0,0,0,0.15)',
+            overflowX: 'auto',
+          }}
+        >
+          {Object.keys(SAMPLE_PROGRAMS[selectedLang]).map((name) => {
+            const short = name.replace(/^(Rust|JS|TS|Go|Python) — /, '');
+            return (
+              <button
+                key={name}
+                onClick={() => changeProg(name)}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: 10,
+                  fontFamily: "'IBM Plex Mono',monospace",
+                  background:
+                    selectedProgram === name ? `${lc}15` : 'transparent',
+                  border: `1px solid ${selectedProgram === name ? `${lc}40` : 'rgba(148,163,184,0.08)'}`,
+                  color: selectedProgram === name ? lc : '#64748b',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >
+                {short}
+              </button>
+            );
+          })}
+          <span
+            style={{
+              fontSize: 10,
+              color: '#334155',
+              padding: '4px 8px',
+              fontStyle: 'italic',
+              flexShrink: 0,
+            }}
+          >
+            {program.description}
+          </span>
+        </div>
+      )}
 
       {/* Main layout */}
       <div
         style={{
           display: 'flex',
           flexDirection: 'column',
-          height: 'calc(100vh - 93px)',
+          height: isSandboxMode ? 'calc(100vh - 57px)' : 'calc(100vh - 93px)',
         }}
       >
-        {/* TOP ROW: Source (50%) | Stats + Blocks (50%) */}
+        {/* TOP ROW: Source/Sandbox (50%) | Stats + Blocks (50%) */}
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          {/* LEFT: Source */}
-          <SourceViewer
-            code={program.code}
-            langColor={lc}
-            langName={program.lang}
-          />
+          {/* LEFT: Source or Sandbox Editor */}
+          {isSandboxMode ? (
+            <SandboxPanel
+              code={sandboxCode[sandboxLang]}
+              onCodeChange={handleSandboxCodeChange}
+              onRun={handleSandboxRun}
+              onStop={sandbox.stop}
+              status={sandbox.status}
+              stdout={sandbox.stdout}
+              stderr={sandbox.stderr}
+              error={sandbox.error}
+              langColor={lc}
+              langName={sandboxLang}
+            />
+          ) : (
+            <SourceViewer
+              code={program.code}
+              langColor={lc}
+              langName={program.lang}
+            />
+          )}
 
           {/* RIGHT: Stats + Blocks */}
           <div
@@ -446,7 +601,9 @@ const App: React.FC = () => {
                     borderRadius: 6,
                   }}
                 >
-                  ← Press ▶ to begin memory analysis
+                  {isSandboxMode
+                    ? 'Run your code to see memory events'
+                    : '← Press ▶ to begin memory analysis'}
                 </div>
               ) : (
                 [...blocks]
@@ -552,6 +709,7 @@ const App: React.FC = () => {
         >
           <button
             onClick={() => {
+              if (totalSteps === 0) return;
               if (currentStep >= totalSteps - 1) {
                 reset();
                 setTimeout(() => setIsPlaying(true), 50);
@@ -559,6 +717,7 @@ const App: React.FC = () => {
                 setIsPlaying(!isPlaying);
               }
             }}
+            disabled={totalSteps === 0}
             style={{
               width: 34,
               height: 34,
@@ -567,9 +726,9 @@ const App: React.FC = () => {
               background: isPlaying
                 ? 'rgba(34,211,238,0.15)'
                 : 'transparent',
-              color: '#22d3ee',
+              color: totalSteps === 0 ? '#1e293b' : '#22d3ee',
               fontSize: 13,
-              cursor: 'pointer',
+              cursor: totalSteps === 0 ? 'default' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -595,18 +754,18 @@ const App: React.FC = () => {
           </button>
           <button
             onClick={step}
-            disabled={currentStep >= totalSteps - 1}
+            disabled={currentStep >= totalSteps - 1 || totalSteps === 0}
             style={{
               padding: '5px 12px',
               border: '1px solid rgba(148,163,184,0.15)',
               background: 'transparent',
               color:
-                currentStep >= totalSteps - 1 ? '#1e293b' : '#64748b',
+                currentStep >= totalSteps - 1 || totalSteps === 0 ? '#1e293b' : '#64748b',
               fontSize: 10,
               fontFamily: "'IBM Plex Mono',monospace",
               borderRadius: 3,
               cursor:
-                currentStep >= totalSteps - 1 ? 'default' : 'pointer',
+                currentStep >= totalSteps - 1 || totalSteps === 0 ? 'default' : 'pointer',
             }}
           >
             Step →
@@ -621,13 +780,16 @@ const App: React.FC = () => {
                 setIsPlaying(false);
                 setCurrentStep(parseInt(e.target.value));
               }}
+              disabled={totalSteps === 0}
               style={{
                 width: '100%',
                 height: 3,
-                background: `linear-gradient(to right, ${lc} ${((currentStep + 1) / totalSteps) * 100}%, #1e293b ${((currentStep + 1) / totalSteps) * 100}%)`,
+                background: totalSteps > 0
+                  ? `linear-gradient(to right, ${lc} ${((currentStep + 1) / totalSteps) * 100}%, #1e293b ${((currentStep + 1) / totalSteps) * 100}%)`
+                  : '#1e293b',
                 borderRadius: 2,
                 outline: 'none',
-                cursor: 'pointer',
+                cursor: totalSteps === 0 ? 'default' : 'pointer',
               }}
             />
           </div>
