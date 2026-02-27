@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Language, Verdict } from './types';
 import { SAMPLE_PROGRAMS } from './data/samplePrograms';
 import { LANG_COLORS, STATUS_COLORS } from './utils/constants';
@@ -20,6 +20,7 @@ const App: React.FC = () => {
   const [newBlockIds, setNewBlockIds] = useState<Set<string>>(new Set());
   const [showExport, setShowExport] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const program = SAMPLE_PROGRAMS[selectedLang][selectedProgram];
   const events = program.events;
@@ -37,6 +38,18 @@ const App: React.FC = () => {
     [events],
   );
 
+  const animateNewBlock = useCallback((id: string) => {
+    setNewBlockIds((s) => new Set([...s, id]));
+    const tid = setTimeout(() => {
+      setNewBlockIds((s) => {
+        const ns = new Set(s);
+        ns.delete(id);
+        return ns;
+      });
+    }, 400);
+    timeoutRefs.current.push(tid);
+  }, []);
+
   useEffect(() => {
     if (isPlaying) {
       intervalRef.current = setInterval(() => {
@@ -48,16 +61,7 @@ const App: React.FC = () => {
           }
           const ev = events[next];
           if (ev?.action === 'alloc' && ev.id) {
-            setNewBlockIds((s) => new Set([...s, ev.id!]));
-            setTimeout(
-              () =>
-                setNewBlockIds((s) => {
-                  const ns = new Set(s);
-                  ns.delete(ev.id!);
-                  return ns;
-                }),
-              400,
-            );
+            animateNewBlock(ev.id);
           }
           return next;
         });
@@ -65,8 +69,10 @@ const App: React.FC = () => {
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      timeoutRefs.current.forEach(clearTimeout);
+      timeoutRefs.current = [];
     };
-  }, [isPlaying, speed, totalSteps, events]);
+  }, [isPlaying, speed, totalSteps, events, animateNewBlock]);
 
   const reset = () => {
     setIsPlaying(false);
@@ -92,16 +98,7 @@ const App: React.FC = () => {
       if (next >= totalSteps) return prev;
       const ev = events[next];
       if (ev?.action === 'alloc' && ev.id) {
-        setNewBlockIds((s) => new Set([...s, ev.id!]));
-        setTimeout(
-          () =>
-            setNewBlockIds((s) => {
-              const ns = new Set(s);
-              ns.delete(ev.id!);
-              return ns;
-            }),
-          400,
-        );
+        animateNewBlock(ev.id);
       }
       return next;
     });

@@ -60,29 +60,6 @@ export function useMemoryAnalysis(
 }
 
 export function useAllSnapshots(events: MemoryEvent[]): HeapSnapshot[] {
-  return useMemo(() => {
-    const bm = new Map<string, { status: string; size: number }>();
-    const sn: HeapSnapshot[] = [];
-    for (const ev of events) {
-      if (ev.action === 'alloc' && ev.id) {
-        bm.set(ev.id, { status: 'active', size: ev.size ?? 0 });
-      } else if (ev.action === 'free' && ev.id && bm.has(ev.id)) {
-        bm.get(ev.id)!.status = 'freed';
-      } else if (ev.action === 'end') {
-        bm.forEach((b) => {
-          if (b.status === 'active') b.status = 'leaked';
-        });
-      }
-      const act = [...bm.values()].filter(
-        (b) => b.status === 'active' || b.status === 'leaked',
-      );
-      sn.push({
-        total: act.reduce((s, b) => s + b.size, 0),
-        leaked: [...bm.values()]
-          .filter((b) => b.status === 'leaked')
-          .reduce((s, b) => s + b.size, 0),
-      });
-    }
-    return sn;
-  }, [events]);
+  const analysis = useMemoryAnalysis(events, events.length - 1);
+  return analysis.snapshots;
 }

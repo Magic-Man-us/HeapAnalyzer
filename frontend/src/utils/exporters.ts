@@ -14,7 +14,9 @@ function downloadFile(content: string, filename: string, mime: string) {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
@@ -132,7 +134,12 @@ export function exportHTML(
   const freedBlocks = blocks.filter((b) => b.status === 'freed');
 
   const escapeHtml = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/'/g, '&#39;')
+      .replace(/"/g, '&quot;');
 
   const codeLines = program.code
     .split('\n')

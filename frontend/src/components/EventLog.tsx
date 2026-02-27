@@ -36,7 +36,7 @@ const EventLog: React.FC<Props> = ({ events, currentStep }) => {
     >
       {vis.map((e, i) => (
         <div
-          key={i}
+          key={`${e.time}-${e.id}`}
           style={{
             color: clr(e.action),
             opacity: i === vis.length - 1 ? 1 : 0.55,
