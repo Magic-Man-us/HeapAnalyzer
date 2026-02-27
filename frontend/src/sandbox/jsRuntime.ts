@@ -1,25 +1,51 @@
 import { instrumentJs } from './instrumentJs';
 import type { MemoryEvent } from '../types';
 
-interface JsResult {
+export interface JsResult {
   events: MemoryEvent[];
   stdout: string;
   stderr: string;
 }
 
 /**
- * Executes instrumented JavaScript inside the worker via indirect eval.
- * Returns validated events array plus stdout/stderr.
+ * Executes instrumented JavaScript inside a Blob URL worker.
+ * This is CSP-safe — no dynamic code evaluation on the main thread or parent worker.
+ * GitHub Pages sets script-src 'self' which forbids dynamic evaluation,
+ * but Blob URLs are treated as same-origin and can run as worker scripts.
+ *
+ * The instrumented code runs as a standalone script that posts its result
+ * back via postMessage.
  */
-export function runJs(userCode: string): JsResult {
-  const instrumented = instrumentJs(userCode);
+export function runJs(userCode: string): Promise<JsResult> {
+  return new Promise((resolve, reject) => {
+    const instrumented = instrumentJs(userCode);
+    const blob = new Blob([instrumented], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
 
-  // Indirect eval — runs in global (worker) scope, not in any closure
-  // eslint-disable-next-line no-eval
-  const indirectEval = eval;
-  const result = indirectEval(instrumented) as unknown;
+    const worker = new Worker(url);
 
-  return validateResult(result);
+    const cleanup = () => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+    };
+
+    worker.onmessage = (e: MessageEvent) => {
+      cleanup();
+      const msg = e.data;
+
+      if (msg.type === 'error') {
+        reject(new Error(msg.error));
+        return;
+      }
+
+      resolve(validateResult(msg));
+    };
+
+    worker.onerror = (err) => {
+      cleanup();
+      reject(new Error(err.message || 'JavaScript execution failed'));
+    };
+  });
 }
 
 function validateResult(raw: unknown): JsResult {

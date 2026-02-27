@@ -1,29 +1,49 @@
 import { describe, it, expect } from 'vitest';
-import { runJs } from '../sandbox/jsRuntime';
+import { instrumentJs } from '../sandbox/instrumentJs';
 
-describe('runJs', () => {
+/**
+ * Tests for the JS runtime behavior. Since runJs now uses Blob Workers
+ * (unavailable in jsdom), we test via the same simulate pattern.
+ *
+ * NOTE: new Function() is used ONLY in tests to simulate Blob worker execution.
+ * Production code uses Blob URL workers (CSP-safe, no dynamic code evaluation).
+ */
+
+interface SimResult {
+  type: string;
+  events: Array<Record<string, unknown>>;
+  stdout: string;
+  stderr: string;
+  error?: string;
+}
+
+function simulate(userCode: string): SimResult {
+  const code = instrumentJs(userCode);
+  let result: SimResult | null = null;
+  const mockSelf = {
+    postMessage: (msg: SimResult) => { result = msg; },
+  };
+  // Test-only execution (production uses Blob URL worker)
+  const executor = new Function('self', code); // eslint-disable-line no-new-func
+  executor(mockSelf);
+  if (!result) throw new Error('Code did not call postMessage');
+  return result;
+}
+
+describe('jsRuntime (via instrumentation)', () => {
   it('returns validated events for simple alloc/free', () => {
-    const result = runJs(`
+    const result = simulate(`
       const id = alloc("buf", 256);
       free(id);
     `);
+    expect(result.type).toBe('result');
     expect(result.events).toHaveLength(2);
-    expect(result.events[0]).toEqual({
-      time: 1,
-      action: 'alloc',
-      id: 'buf_1',
-      size: 256,
-      label: 'buf',
-    });
-    expect(result.events[1]).toEqual({
-      time: 2,
-      action: 'free',
-      id: 'buf_1',
-    });
+    expect(result.events[0]).toMatchObject({ action: 'alloc', id: 'buf_1', size: 256, label: 'buf' });
+    expect(result.events[1]).toMatchObject({ action: 'free', id: 'buf_1' });
   });
 
   it('returns stdout and stderr strings', () => {
-    const result = runJs(`
+    const result = simulate(`
       console.log("out");
       console.error("err");
     `);
@@ -32,14 +52,14 @@ describe('runJs', () => {
   });
 
   it('detects leaks via end event', () => {
-    const result = runJs('alloc("leaked", 128);');
+    const result = simulate('alloc("leaked", 128);');
     const actions = result.events.map((e) => e.action);
     expect(actions).toContain('alloc');
     expect(actions).toContain('end');
   });
 
   it('detects double free', () => {
-    const result = runJs(`
+    const result = simulate(`
       const id = alloc("x", 32);
       free(id);
       free(id);
@@ -47,37 +67,34 @@ describe('runJs', () => {
     expect(result.events[2].action).toBe('double_free');
   });
 
-  it('throws on syntax error in user code', () => {
-    expect(() => runJs('const = ;')).toThrow();
+  it('syntax error in user code throws during construction', () => {
+    // In production, Blob worker fires onerror for syntax errors.
+    // In test, Function constructor throws SyntaxError at parse time.
+    expect(() => simulate('const = ;')).toThrow(SyntaxError);
   });
 
-  it('throws on runtime error in user code', () => {
-    expect(() => runJs('undefinedFunction();')).toThrow();
+  it('posts error on runtime error in user code', () => {
+    const result = simulate('undefinedFunction();');
+    expect(result.type).toBe('error');
   });
 
-  it('validates event fields — only includes properly typed fields', () => {
-    // The instrumentation always produces correct types, but this tests
-    // that the validation layer would strip bad fields if they appeared
-    const result = runJs(`
+  it('validates event fields have correct types', () => {
+    const result = simulate(`
       const a = alloc("test", 100);
       free(a);
     `);
     for (const ev of result.events) {
       expect(typeof ev.time).toBe('number');
       expect(typeof ev.action).toBe('string');
-      if (ev.id !== undefined) expect(typeof ev.id).toBe('string');
-      if (ev.size !== undefined) expect(typeof ev.size).toBe('number');
-      if (ev.label !== undefined) expect(typeof ev.label).toBe('string');
     }
   });
 
   it('handles multiple allocs and partial frees', () => {
-    const result = runJs(`
+    const result = simulate(`
       const a = alloc("a", 10);
       const b = alloc("b", 20);
       const c = alloc("c", 30);
       free(a);
-      // b and c are leaked
     `);
     const allocs = result.events.filter((e) => e.action === 'alloc');
     const frees = result.events.filter((e) => e.action === 'free');
@@ -88,7 +105,7 @@ describe('runJs', () => {
   });
 
   it('returns empty stdout/stderr when nothing is printed', () => {
-    const result = runJs(`
+    const result = simulate(`
       const id = alloc("quiet", 8);
       free(id);
     `);

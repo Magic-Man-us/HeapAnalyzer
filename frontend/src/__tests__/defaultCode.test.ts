@@ -1,6 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_CODE } from '../sandbox/defaultCode';
-import { runJs } from '../sandbox/jsRuntime';
+import { instrumentJs } from '../sandbox/instrumentJs';
+
+/**
+ * Tests for default code templates.
+ * Test-only: uses Function constructor to simulate Blob worker execution.
+ * Production code uses Blob URL workers (CSP-safe).
+ */
+
+interface SimResult {
+  type: string;
+  events: Array<Record<string, unknown>>;
+  stdout: string;
+  stderr: string;
+}
+
+function simulate(userCode: string): SimResult {
+  const code = instrumentJs(userCode);
+  let result: SimResult | null = null;
+  const mockSelf = { postMessage: (msg: SimResult) => { result = msg; } };
+  // eslint-disable-next-line no-new-func
+  new Function('self', code)(mockSelf);
+  if (!result) throw new Error('Code did not call postMessage');
+  return result;
+}
 
 describe('defaultCode', () => {
   it('has templates for JavaScript and Python', () => {
@@ -27,9 +50,9 @@ describe('defaultCode', () => {
   });
 
   it('JavaScript template is valid and produces events when run', () => {
-    const result = runJs(DEFAULT_CODE.JavaScript);
+    const result = simulate(DEFAULT_CODE.JavaScript);
+    expect(result.type).toBe('result');
     expect(result.events.length).toBeGreaterThan(0);
-    // Should have at least one alloc and one leak (end event)
     const actions = result.events.map((e) => e.action);
     expect(actions).toContain('alloc');
     expect(actions).toContain('end');

@@ -1,6 +1,7 @@
 /**
  * Wraps user JavaScript code with alloc/free tracking API.
- * The instrumented code collects MemoryEvent[] and writes to stdout/stderr.
+ * The instrumented code runs as a standalone script inside a Blob worker.
+ * It posts its result back via postMessage (no eval required).
  */
 export function instrumentJs(userCode: string): string {
   return `
@@ -49,16 +50,30 @@ const console = {
   warn: (...args) => __stderr.push(args.map(String).join(' ')),
 };
 
-// --- User code ---
-${userCode}
-// --- End user code ---
+try {
+  // --- User code ---
+  ${userCode}
+  // --- End user code ---
 
-// Mark remaining allocations as leaked
-if (__allocs.size > 0) {
-  __time++;
-  __events.push({ time: __time, action: 'end' });
+  // Mark remaining allocations as leaked
+  if (__allocs.size > 0) {
+    __time++;
+    __events.push({ time: __time, action: 'end' });
+  }
+
+  self.postMessage({
+    type: 'result',
+    events: __events,
+    stdout: __stdout.join('\\n'),
+    stderr: __stderr.join('\\n'),
+  });
+} catch (err) {
+  self.postMessage({
+    type: 'error',
+    error: err instanceof Error ? err.message : String(err),
+    stdout: __stdout.join('\\n'),
+    stderr: __stderr.join('\\n'),
+  });
 }
-
-({ events: __events, stdout: __stdout.join('\\n'), stderr: __stderr.join('\\n') });
 `;
 }

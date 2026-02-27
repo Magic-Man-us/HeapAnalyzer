@@ -25,7 +25,7 @@ self.onmessage = async (e: MessageEvent<WorkerRunMessage>) => {
 
   try {
     if (language === 'JavaScript') {
-      const result = runJs(code);
+      const result = await runJs(code);
       postMsg({ type: 'result', events: result.events, stdout: result.stdout, stderr: result.stderr });
     } else if (language === 'Python') {
       const result = await runPython(code, (status) => {
