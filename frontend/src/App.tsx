@@ -37,8 +37,9 @@ const App: React.FC = () => {
 
   // Determine event source based on mode
   const isSandboxMode = mode === 'sandbox';
-  const program = SAMPLE_PROGRAMS[selectedLang][selectedProgram];
-  const sampleEvents = program.events;
+  const programMap = SAMPLE_PROGRAMS[selectedLang] ?? {};
+  const program = programMap[selectedProgram] ?? programMap[Object.keys(programMap)[0]];
+  const sampleEvents = program?.events ?? [];
 
   const events: MemoryEvent[] = isSandboxMode ? sandbox.events : sampleEvents;
   const totalSteps = events.length;
@@ -126,6 +127,14 @@ const App: React.FC = () => {
         setSandboxLang('JavaScript');
       } else {
         setSandboxLang(selectedLang as SandboxLanguage);
+      }
+    } else {
+      // Switching back to samples — ensure selectedProgram is valid for the current lang
+      const programs = SAMPLE_PROGRAMS[selectedLang];
+      if (!programs || !programs[selectedProgram]) {
+        const fallbackLang: Language = 'Rust';
+        setSelectedLang(fallbackLang);
+        setSelectedProgram(Object.keys(SAMPLE_PROGRAMS[fallbackLang])[0]);
       }
     }
   };
